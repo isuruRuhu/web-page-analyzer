@@ -11,7 +11,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/isuruRuhu/web-page-analyzer/internal/analyzer"
 	"github.com/isuruRuhu/web-page-analyzer/internal/web"
+)
+
+const (
+	// fetchTimeout limits how long fetching a page to analyze may take.
+	fetchTimeout = 15 * time.Second
+	// shutdownTimeout limits how long the server will wait for graceful shutdown.
+	shutdownTimeout = 10 * time.Second
 )
 
 func main() {
@@ -32,14 +40,14 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	client := &http.Client{Timeout: fetchTimeout}
 	srv := &http.Server{
-		Addr:              getenv("ADDR", ":8080"),
-		Handler:           web.NewHandler(logger),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
+		Addr:         getenv("ADDR", ":9090"),
+		Handler:      web.NewHandler(logger, analyzer.New(client)),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+		ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 
 	errCh := make(chan error, 1)
@@ -57,7 +65,7 @@ func run() error {
 	stop()
 
 	logger.Info("shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
