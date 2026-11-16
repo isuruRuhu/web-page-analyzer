@@ -28,6 +28,7 @@ type Analyzer struct {
 
 	// Limits for checking links, set to the defaults by New.
 	workers      int
+	maxLinks     int
 	linkTimeout  time.Duration
 	checkTimeout time.Duration
 }
@@ -37,6 +38,7 @@ func New(client *http.Client) *Analyzer {
 	return &Analyzer{
 		client:       client,
 		workers:      defaultWorkers,
+		maxLinks:     defaultMaxLinks,
 		linkTimeout:  defaultLinkTimeout,
 		checkTimeout: defaultCheckTimeout,
 	}
@@ -51,7 +53,7 @@ type Result struct {
 	InternalLinks     int            // http(s) links to the page's own host
 	ExternalLinks     int            // http(s) links to any other host
 	InaccessibleLinks int            // links that failed or answered with status 400 or above
-	UncheckedLinks    int            // links not checked before the time limit or cancellation
+	UncheckedLinks    int            // links left unchecked by the link limit, time limit or cancellation
 	HasLoginForm      bool           // a form with exactly one password field
 }
 
@@ -124,8 +126,10 @@ func isHTML(contentType string) bool {
 	if contentType == "" {
 		return true
 	}
+	// A broken parameter, such as "text/html; charset", still leaves a usable
+	// media type.
 	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
+	if err != nil && !errors.Is(err, mime.ErrInvalidMediaParameter) {
 		return false
 	}
 	return mediaType == "text/html" || mediaType == "application/xhtml+xml"

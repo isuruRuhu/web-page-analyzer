@@ -516,7 +516,7 @@ func TestAnalyzeClientGone(t *testing.T) {
 func TestRenderUncheckedLinks(t *testing.T) {
 	const (
 		inaccessibleRow = `<tr><th scope="row">Inaccessible links</th><td>2</td></tr>`
-		uncheckedRow    = `<tr><th scope="row">Unchecked links</th><td>3 <span class="none">(could not be checked within the time limit)</span></td></tr>`
+		uncheckedRow    = `<tr><th scope="row">Unchecked links</th><td>3 <span class="none">(not checked, the time or link limit was reached)</span></td></tr>`
 		loginRow        = `<tr><th scope="row">Login form</th><td>No</td></tr>`
 	)
 

@@ -11,6 +11,9 @@ import (
 
 // htmlVersions maps lowercased doctype public identifiers to HTML versions.
 var htmlVersions = map[string]string{
+	"-//w3c//dtd html 4.0//en":               "HTML 4.0 Strict",
+	"-//w3c//dtd html 4.0 transitional//en":  "HTML 4.0 Transitional",
+	"-//w3c//dtd html 4.0 frameset//en":      "HTML 4.0 Frameset",
 	"-//w3c//dtd html 4.01//en":              "HTML 4.01 Strict",
 	"-//w3c//dtd html 4.01 transitional//en": "HTML 4.01 Transitional",
 	"-//w3c//dtd html 4.01 frameset//en":     "HTML 4.01 Frameset",
@@ -18,6 +21,9 @@ var htmlVersions = map[string]string{
 	"-//w3c//dtd xhtml 1.0 transitional//en": "XHTML 1.0 Transitional",
 	"-//w3c//dtd xhtml 1.0 frameset//en":     "XHTML 1.0 Frameset",
 	"-//w3c//dtd xhtml 1.1//en":              "XHTML 1.1",
+	"-//w3c//dtd xhtml basic 1.0//en":        "XHTML Basic 1.0",
+	"-//w3c//dtd xhtml basic 1.1//en":        "XHTML Basic 1.1",
+	"-//w3c//dtd xhtml+rdfa 1.0//en":         "XHTML+RDFa 1.0",
 	"-//w3c//dtd html 3.2 final//en":         "HTML 3.2",
 	"-//ietf//dtd html 2.0//en":              "HTML 2.0",
 }
@@ -98,8 +104,9 @@ func parse(body []byte, pageURL *url.URL) (*Result, []*url.URL, error) {
 // htmlVersion names the HTML version declared by a doctype node.
 func htmlVersion(doctype *html.Node) string {
 	public := attr(doctype, "public")
+	system := attr(doctype, "system")
 	// HTML5 has no public identifier, only an optional about:legacy-compat system one.
-	if doctype.Data == "html" && public == "" {
+	if doctype.Data == "html" && public == "" && (system == "" || system == "about:legacy-compat") {
 		return "HTML5"
 	}
 	if v, ok := htmlVersions[strings.ToLower(public)]; ok {

@@ -68,6 +68,13 @@ func TestUniqueLinks(t *testing.T) {
 			wantCounts: map[string]int{"https://example.com/docs/guide?q=1": 1},
 		},
 		{
+			name:       "empty path is the same as /",
+			page:       "https://example.com",
+			hrefs:      []string{"/", "https://example.com", "https://other.example", "https://other.example/"},
+			wantURLs:   []string{"https://other.example/"},
+			wantCounts: map[string]int{"https://other.example/": 2},
+		},
+		{
 			name:       "page URL with a fragment",
 			page:       "https://example.com/docs/guide#intro",
 			hrefs:      []string{"https://example.com/docs/guide", "/other"},
@@ -407,4 +414,26 @@ func TestCheckLinksCancel(t *testing.T) {
 
 	ts.Close()
 	waitForGoroutines(t, before)
+}
+
+func TestCheckLinksLimit(t *testing.T) {
+	var requests atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+	}))
+	defer ts.Close()
+
+	// Five different links, the last of them twice, with room for three.
+	page := ts.URL + "/page"
+	links := linksOn(t, page, "/1", "/2", "/3", "/4", "/5", "/5")
+	a := New(ts.Client())
+	a.maxLinks = 3
+
+	inaccessible, unchecked := a.checkLinks(t.Context(), mustParse(t, page), links)
+	if inaccessible != 0 || unchecked != 3 {
+		t.Errorf("inaccessible, unchecked = %d, %d, want 0, 3", inaccessible, unchecked)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Errorf("server got %d requests, want 3", got)
+	}
 }

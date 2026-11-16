@@ -11,6 +11,9 @@ import (
 const (
 	// defaultWorkers is how many links are checked at the same time.
 	defaultWorkers = 20
+	// defaultMaxLinks is how many different links are checked per page. The
+	// rest are reported as unchecked.
+	defaultMaxLinks = 500
 	// defaultLinkTimeout limits how long checking one link may take.
 	defaultLinkTimeout = 5 * time.Second
 	// defaultCheckTimeout limits how long checking all the links on a page may
@@ -34,13 +37,19 @@ type linkResult struct {
 	state linkState
 }
 
-// checkLinks requests every unique link once and returns how many links are
-// inaccessible and how many could not be checked in time, both counted per
-// occurrence on the page.
+// checkLinks requests every unique link once, up to the link limit, and
+// returns how many links are inaccessible and how many were left unchecked,
+// both counted per occurrence on the page.
 func (a *Analyzer) checkLinks(ctx context.Context, page *url.URL, links []*url.URL) (inaccessible, unchecked int) {
 	urls, counts := uniqueLinks(page, links)
 	if len(urls) == 0 {
 		return 0, 0
+	}
+	if len(urls) > a.maxLinks {
+		for _, u := range urls[a.maxLinks:] {
+			unchecked += counts[u]
+		}
+		urls = urls[:a.maxLinks]
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, a.checkTimeout)
@@ -114,15 +123,15 @@ func (a *Analyzer) checkLink(ctx context.Context, rawURL string) linkState {
 	return linkAccessible
 }
 
-// uniqueLinks returns the links to check, each once and without its fragment,
-// in page order, and how many times each appears. Links to the page itself are
+// uniqueLinks returns the links to check, each once in the form given by
+// linkKey, in page order, and how many times each appears. Links to the page itself are
 // left out, since it was just fetched.
 func uniqueLinks(page *url.URL, links []*url.URL) ([]string, map[string]int) {
-	self := withoutFragment(page)
+	self := linkKey(page)
 	var urls []string
 	counts := make(map[string]int)
 	for _, link := range links {
-		u := withoutFragment(link)
+		u := linkKey(link)
 		if u == self {
 			continue
 		}
@@ -134,10 +143,15 @@ func uniqueLinks(page *url.URL, links []*url.URL) ([]string, map[string]int) {
 	return urls, counts
 }
 
-// withoutFragment returns u as a string, leaving out any fragment.
-func withoutFragment(u *url.URL) string {
+// linkKey returns u as a string without its fragment and with "/" for an
+// empty path, so that https://example.com#top and https://example.com/ are
+// the same link.
+func linkKey(u *url.URL) string {
 	v := *u
 	v.Fragment = ""
 	v.RawFragment = ""
+	if v.Path == "" {
+		v.Path = "/"
+	}
 	return v.String()
 }

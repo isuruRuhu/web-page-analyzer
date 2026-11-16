@@ -19,7 +19,7 @@ const (
 	// fetchTimeout limits how long fetching a page to analyze may take.
 	fetchTimeout = 15 * time.Second
 	// shutdownTimeout limits how long the server will wait for graceful shutdown.
-	shutdownTimeout = 10 * time.Second
+	shutdownTimeout = 60 * time.Second
 )
 
 func main() {

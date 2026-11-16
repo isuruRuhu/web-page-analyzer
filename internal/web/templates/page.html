@@ -51,7 +51,7 @@
       <tr><th scope="row">External links</th><td>{{.ExternalLinks}}</td></tr>
       <tr><th scope="row">Inaccessible links</th><td>{{.InaccessibleLinks}}</td></tr>
       {{- if .UncheckedLinks}}
-      <tr><th scope="row">Unchecked links</th><td>{{.UncheckedLinks}} <span class="none">(could not be checked within the time limit)</span></td></tr>
+      <tr><th scope="row">Unchecked links</th><td>{{.UncheckedLinks}} <span class="none">(not checked, the time or link limit was reached)</span></td></tr>
       {{- end}}
       <tr><th scope="row">Login form</th><td>{{if .HasLoginForm}}Yes{{else}}No{{end}}</td></tr>
     </table>

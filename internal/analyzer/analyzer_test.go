@@ -55,6 +55,14 @@ func TestFetch(t *testing.T) {
 			wantBody: page,
 		},
 		{
+			name: "html with a broken parameter",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/html; charset")
+				fmt.Fprint(w, page)
+			},
+			wantBody: page,
+		},
+		{
 			name: "xhtml",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/xhtml+xml")
@@ -190,7 +198,8 @@ func TestFetchNotHTML(t *testing.T) {
 	}{
 		{name: "json", contentType: "application/json"},
 		{name: "image", contentType: "image/png"},
-		{name: "malformed", contentType: "text/html; charset"},
+		{name: "malformed", contentType: "text html"},
+		{name: "json with a broken parameter", contentType: "application/json; charset"},
 	}
 
 	for _, tt := range tests {

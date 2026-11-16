@@ -50,7 +50,10 @@ func TestParseHTMLVersion(t *testing.T) {
 		{name: "byte order mark before doctype", doc: "\ufeff<!DOCTYPE html>", want: "HTML5"},
 		{name: "no doctype", doc: "<html><head><title>t</title></head></html>", want: "Unknown (no doctype)"},
 		{name: "doctype after text is dropped", doc: "hello<!DOCTYPE html>", want: "Unknown (no doctype)"},
-		{name: "unknown public identifier", doc: `<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0//EN">`, want: "Unknown"},
+		{name: "html 4.0 transitional", doc: `<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">`, want: "HTML 4.0 Transitional"},
+		{name: "xhtml basic 1.1", doc: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML Basic 1.1//EN" "http://www.w3.org/TR/xhtml-basic/xhtml-basic11.dtd">`, want: "XHTML Basic 1.1"},
+		{name: "system identifier only", doc: `<!DOCTYPE html SYSTEM "http://www.w3.org/TR/html4/strict.dtd">`, want: "Unknown"},
+		{name: "unknown public identifier", doc: `<!DOCTYPE HTML PUBLIC "-//Example//DTD Custom 1.0//EN">`, want: "Unknown"},
 		{name: "unknown name", doc: "<!DOCTYPE svg>", want: "Unknown"},
 		{name: "empty doctype", doc: "<!DOCTYPE>", want: "Unknown"},
 	}
