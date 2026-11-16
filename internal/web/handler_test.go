@@ -82,6 +82,20 @@ func checkRequestLog(t *testing.T, entries map[string]logEntry, method, path str
 	}
 }
 
+// checkRows checks that body contains rows in the given order.
+func checkRows(t *testing.T, body string, rows []string) {
+	t.Helper()
+	rest := body
+	for _, want := range rows {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Errorf("body does not contain %q after the rows before it", want)
+			continue
+		}
+		rest = rest[i+len(want):]
+	}
+}
+
 // htmlPage returns a handler that serves page as HTML.
 func htmlPage(page string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +169,8 @@ func TestForm(t *testing.T) {
 }
 
 func TestAnalyze(t *testing.T) {
+	// The external link is plain http because upstream.Client() sends requests
+	// for http://example.com to upstream, so checking it needs no internet.
 	const loginPage = `<!DOCTYPE html>
 <html>
 <head><title>Sign in | Example</title></head>
@@ -166,11 +182,17 @@ func TestAnalyze(t *testing.T) {
 <input name="user">
 <input type="password" name="pass">
 </form>
+<a href="/forgot">Forgot password?</a>
+<a href="/signup">Sign up</a>
+<a href="http://example.com/help">Help</a>
 </body>
 </html>`
 
+	// No handler for /forgot, so that link is inaccessible.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", htmlPage(loginPage))
+	mux.HandleFunc("/signup", htmlPage("<title>Sign up</title>"))
+	mux.HandleFunc("/help", htmlPage("<title>Help</title>"))
 	mux.HandleFunc("/plain", htmlPage("<h3>Only a heading</h3>"))
 	mux.Handle("/old", http.RedirectHandler("/plain", http.StatusMovedPermanently))
 	upstream := httptest.NewServer(mux)
@@ -195,6 +217,9 @@ func TestAnalyze(t *testing.T) {
 				`<tr><th scope="row">h4 headings</th><td>0</td></tr>`,
 				`<tr><th scope="row">h5 headings</th><td>0</td></tr>`,
 				`<tr><th scope="row">h6 headings</th><td>0</td></tr>`,
+				`<tr><th scope="row">Internal links</th><td>2</td></tr>`,
+				`<tr><th scope="row">External links</th><td>1</td></tr>`,
+				`<tr><th scope="row">Inaccessible links</th><td>1</td></tr>`,
 				`<tr><th scope="row">Login form</th><td>Yes</td></tr>`,
 			},
 		},
@@ -206,6 +231,9 @@ func TestAnalyze(t *testing.T) {
 				`<tr><th scope="row">HTML version</th><td>Unknown (no doctype)</td></tr>`,
 				`<tr><th scope="row">Page title</th><td><span class="none">(no title)</span></td></tr>`,
 				`<tr><th scope="row">h3 headings</th><td>1</td></tr>`,
+				`<tr><th scope="row">Internal links</th><td>0</td></tr>`,
+				`<tr><th scope="row">External links</th><td>0</td></tr>`,
+				`<tr><th scope="row">Inaccessible links</th><td>0</td></tr>`,
 				`<tr><th scope="row">Login form</th><td>No</td></tr>`,
 			},
 		},
@@ -237,17 +265,12 @@ func TestAnalyze(t *testing.T) {
 					t.Errorf("body does not contain %q", want)
 				}
 			}
-			rest := body
-			for _, want := range tt.wantRows {
-				i := strings.Index(rest, want)
-				if i < 0 {
-					t.Errorf("body does not contain %q after the rows before it", want)
-					continue
-				}
-				rest = rest[i+len(want):]
-			}
+			checkRows(t, body, tt.wantRows)
 			if strings.Contains(body, `class="error"`) {
 				t.Error("body contains an error")
+			}
+			if strings.Contains(body, "Unchecked links") {
+				t.Error("body contains an unchecked links row")
 			}
 			checkRequestLog(t, decodeLogs(t, logs), http.MethodGet, "/analyze", http.StatusOK)
 		})
@@ -487,6 +510,39 @@ func TestAnalyzeClientGone(t *testing.T) {
 	}
 	if _, ok := decodeLogs(t, logs)["analysis failed"]; ok {
 		t.Error("logged a failed analysis for a client that went away")
+	}
+}
+
+func TestRenderUncheckedLinks(t *testing.T) {
+	const (
+		inaccessibleRow = `<tr><th scope="row">Inaccessible links</th><td>2</td></tr>`
+		uncheckedRow    = `<tr><th scope="row">Unchecked links</th><td>3 <span class="none">(could not be checked within the time limit)</span></td></tr>`
+		loginRow        = `<tr><th scope="row">Login form</th><td>No</td></tr>`
+	)
+
+	tests := []struct {
+		name      string
+		unchecked int
+		wantRows  []string // in the order they must appear
+	}{
+		{name: "all links checked", wantRows: []string{inaccessibleRow, loginRow}},
+		{name: "some links unchecked", unchecked: 3, wantRows: []string{inaccessibleRow, uncheckedRow, loginRow}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &server{logger: slog.New(slog.DiscardHandler), page: pageTemplate}
+			res := &analyzer.Result{InaccessibleLinks: 2, UncheckedLinks: tt.unchecked}
+
+			rec := httptest.NewRecorder()
+			s.render(rec, http.StatusOK, pageData{Result: res})
+
+			body := rec.Body.String()
+			checkRows(t, body, tt.wantRows)
+			if tt.unchecked == 0 && strings.Contains(body, "Unchecked links") {
+				t.Error("body contains an unchecked links row")
+			}
+		})
 	}
 }
 

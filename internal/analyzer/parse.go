@@ -3,6 +3,7 @@ package analyzer
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -21,20 +22,26 @@ var htmlVersions = map[string]string{
 	"-//ietf//dtd html 2.0//en":              "HTML 2.0",
 }
 
-// parse reads an HTML document and fills in every Result field except URL.
-func parse(body []byte) (*Result, error) {
+// parse reads an HTML document fetched from pageURL and fills in every Result
+// field except URL and the link check counts. It also returns the page's http
+// and https links, duplicates included, for checking.
+func parse(body []byte, pageURL *url.URL) (*Result, []*url.URL, error) {
 	// html.Parse treats a byte order mark as text, which hides the doctype.
 	body = bytes.TrimPrefix(body, []byte("\ufeff"))
 	doc, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("parse HTML: %w", err)
+		return nil, nil, fmt.Errorf("parse HTML: %w", err)
 	}
 
 	res := &Result{
 		HTMLVersion: "Unknown (no doctype)",
 		Headings:    map[string]int{"h1": 0, "h2": 0, "h3": 0, "h4": 0, "h5": 0, "h6": 0},
 	}
-	var titleFound bool
+	var (
+		titleFound bool
+		baseHref   string   // of the first <base> with a non-empty href
+		hrefs      []string // non-empty hrefs of <a> elements, in document order
+	)
 	passwords := make(map[*html.Node]int) // password inputs per form
 	for n := range doc.Descendants() {
 		if n.Type == html.DoctypeNode {
@@ -59,6 +66,14 @@ func parse(body []byte) (*Result, error) {
 					passwords[form]++
 				}
 			}
+		case "a":
+			if href := strings.TrimSpace(attr(n, "href")); href != "" {
+				hrefs = append(hrefs, href)
+			}
+		case "base":
+			if baseHref == "" {
+				baseHref = strings.TrimSpace(attr(n, "href"))
+			}
 		}
 	}
 	// Sign-up and password change forms have two or more password fields.
@@ -67,7 +82,17 @@ func parse(body []byte) (*Result, error) {
 			res.HasLoginForm = true
 		}
 	}
-	return res, nil
+	// Resolved after the walk, so as in browsers a <base> also applies to
+	// links that come before it.
+	links := resolveLinks(baseURL(pageURL, baseHref), hrefs)
+	for _, link := range links {
+		if sameHost(link, pageURL) {
+			res.InternalLinks++
+		} else {
+			res.ExternalLinks++
+		}
+	}
+	return res, links, nil
 }
 
 // htmlVersion names the HTML version declared by a doctype node.

@@ -6,9 +6,10 @@ import (
 	"testing"
 )
 
+// mustParseHTML parses doc as if it was fetched from https://example.com/.
 func mustParseHTML(t *testing.T, doc string) *Result {
 	t.Helper()
-	res, err := parse([]byte(doc))
+	res, _, err := parse([]byte(doc), mustParse(t, "https://example.com/"))
 	if err != nil {
 		t.Fatalf("parse %q: %v", doc, err)
 	}
