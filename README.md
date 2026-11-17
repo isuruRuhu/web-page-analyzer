@@ -22,6 +22,9 @@ short description of what went wrong.
 - make (optional, the plain `go` commands are listed below as well)
 - Docker (optional, only for running it in a container)
 
+Developed and tested on macOS. The Docker image runs on Linux. It has not been
+tested on Windows, where Docker is the safest way to run it.
+
 ## Technologies
 
 Backend: Go, using the standard library for the HTTP server (`net/http`),
