@@ -64,6 +64,13 @@ func TestDescribeError(t *testing.T) {
 			want:        problem{Status: "502 Bad Gateway", Message: "The page could not be reached: connection refused."},
 		},
 		{
+			name:        "private address",
+			err:         fmt.Errorf("fetch localhost: %w", analyzer.ErrPrivateAddress),
+			wantOutcome: "blocked",
+			wantStatus:  http.StatusForbidden,
+			want:        problem{Status: "403 Forbidden", Message: "The URL points to a private or local address, which is not allowed."},
+		},
+		{
 			name:        "not HTML",
 			err:         fmt.Errorf("%w: content type is %q", analyzer.ErrNotHTML, "image/png"),
 			wantOutcome: "not_html",

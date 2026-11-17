@@ -24,6 +24,7 @@ const (
 	outcomeUnreachable = "unreachable"
 	outcomeTimeout     = "timeout"
 	outcomeNotHTML     = "not_html"
+	outcomeBlocked     = "blocked"
 	outcomeCanceled    = "canceled"
 	outcomeError       = "error"
 )
@@ -51,6 +52,9 @@ func describeError(err error) (string, int, *problem) {
 			outcome, status = outcomeTimeout, http.StatusGatewayTimeout
 		}
 		return outcome, status, newProblem(status, "The page could not be reached: "+unreachableErr.Reason+".")
+	case errors.Is(err, analyzer.ErrPrivateAddress):
+		return outcomeBlocked, http.StatusForbidden, newProblem(http.StatusForbidden,
+			"The URL points to a private or local address, which is not allowed.")
 	case errors.Is(err, analyzer.ErrNotHTML):
 		return outcomeNotHTML, http.StatusUnprocessableEntity, newProblem(http.StatusUnprocessableEntity,
 			"The URL does not point to an HTML page, so it could not be analyzed.")

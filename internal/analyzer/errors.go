@@ -12,6 +12,10 @@ import (
 // ErrNotHTML means the page was fetched but is not an HTML document.
 var ErrNotHTML = errors.New("not an HTML page")
 
+// ErrPrivateAddress means the page is at an address that is not on the public
+// internet, such as localhost or 10.0.0.1, which the client refuses to request.
+var ErrPrivateAddress = errors.New("private or local address")
+
 // InvalidURLError means the URL entered by the user was rejected.
 type InvalidURLError struct {
 	Reason string // short description for the user, such as "the URL has no host name"

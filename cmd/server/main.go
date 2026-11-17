@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -51,7 +52,11 @@ func run() error {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
-	client := &http.Client{Timeout: fetchTimeout}
+	allowPrivate, err := strconv.ParseBool(getenv("ALLOW_PRIVATE_ADDRESSES", "false"))
+	if err != nil {
+		return fmt.Errorf("parse ALLOW_PRIVATE_ADDRESSES: %w", err)
+	}
+	client := analyzer.NewClient(fetchTimeout, allowPrivate)
 	srv := &http.Server{
 		Addr:         getenv("ADDR", ":9090"),
 		Handler:      web.NewHandler(logger, analyzer.New(client), reg),

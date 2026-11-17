@@ -92,6 +92,9 @@ func (a *Analyzer) fetch(ctx context.Context, u *url.URL) (*url.URL, []byte, err
 		if resp != nil {
 			return nil, nil, &UnreachableError{Reason: "too many redirects", Err: err}
 		}
+		if errors.Is(err, ErrPrivateAddress) {
+			return nil, nil, fmt.Errorf("fetch %s: %w", u.Host, ErrPrivateAddress)
+		}
 		return nil, nil, unreachable(err)
 	}
 	defer resp.Body.Close()

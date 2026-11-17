@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -410,6 +411,15 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantTitle:   "502 Bad Gateway",
 			wantMessage: unreachedMsg + "connection refused.",
 			wantOutcome: "unreachable",
+		},
+		{
+			name:        "private address",
+			client:      analyzer.NewClient(time.Second, false),
+			target:      upstream.URL,
+			wantStatus:  http.StatusForbidden,
+			wantTitle:   "403 Forbidden",
+			wantMessage: "The URL points to a private or local address, which is not allowed.",
+			wantOutcome: "blocked",
 		},
 		{
 			name:        "not HTML",
