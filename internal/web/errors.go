@@ -16,10 +16,22 @@ type problem struct {
 	Message string // what went wrong, in full sentences
 }
 
-// describeError maps an error from Analyze to the status of our response and
-// the problem shown to the user. Unexpected errors get a generic message; the
-// details only go to the log.
-func describeError(err error) (int, *problem) {
+// Outcomes of an analysis, as recorded in page_analyses_total.
+const (
+	outcomeOK          = "ok"
+	outcomeInvalidURL  = "invalid_url"
+	outcomeBadStatus   = "bad_status"
+	outcomeUnreachable = "unreachable"
+	outcomeTimeout     = "timeout"
+	outcomeNotHTML     = "not_html"
+	outcomeCanceled    = "canceled"
+	outcomeError       = "error"
+)
+
+// describeError maps an error from Analyze to the outcome recorded in the
+// metrics, the status of our response and the problem shown to the user.
+// Unexpected errors get a generic message; the details only go to the log.
+func describeError(err error) (string, int, *problem) {
 	var (
 		invalidErr     *analyzer.InvalidURLError
 		statusErr      *analyzer.StatusError
@@ -27,23 +39,23 @@ func describeError(err error) (int, *problem) {
 	)
 	switch {
 	case errors.As(err, &invalidErr):
-		return http.StatusBadRequest, newProblem(http.StatusBadRequest,
+		return outcomeInvalidURL, http.StatusBadRequest, newProblem(http.StatusBadRequest,
 			sentence(invalidErr.Reason)+" Enter a full URL such as https://example.com.")
 	case errors.As(err, &statusErr):
 		// The page shows the target's own status; ours says the upstream failed.
-		return http.StatusBadGateway, newProblem(statusErr.StatusCode,
+		return outcomeBadStatus, http.StatusBadGateway, newProblem(statusErr.StatusCode,
 			"The page responded with this error status, so it could not be analyzed.")
 	case errors.As(err, &unreachableErr):
-		status := http.StatusBadGateway
+		outcome, status := outcomeUnreachable, http.StatusBadGateway
 		if unreachableErr.Timeout {
-			status = http.StatusGatewayTimeout
+			outcome, status = outcomeTimeout, http.StatusGatewayTimeout
 		}
-		return status, newProblem(status, "The page could not be reached: "+unreachableErr.Reason+".")
+		return outcome, status, newProblem(status, "The page could not be reached: "+unreachableErr.Reason+".")
 	case errors.Is(err, analyzer.ErrNotHTML):
-		return http.StatusUnprocessableEntity, newProblem(http.StatusUnprocessableEntity,
+		return outcomeNotHTML, http.StatusUnprocessableEntity, newProblem(http.StatusUnprocessableEntity,
 			"The URL does not point to an HTML page, so it could not be analyzed.")
 	default:
-		return http.StatusInternalServerError, newProblem(http.StatusInternalServerError,
+		return outcomeError, http.StatusInternalServerError, newProblem(http.StatusInternalServerError,
 			"Something went wrong while analyzing the page. Please try again later.")
 	}
 }

@@ -32,3 +32,14 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 		)
 	})
 }
+
+// recordRequests records the count and duration of every request by route.
+// next must be the mux, which sets r.Pattern while routing the request.
+func recordRequests(m *metrics, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		m.observeRequest(r, rec.status, time.Since(start))
+	})
+}

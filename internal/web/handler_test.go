@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/isuruRuhu/web-page-analyzer/internal/analyzer"
 )
 
@@ -40,11 +42,12 @@ type logEntry struct {
 	Err        string `json:"err"`
 }
 
-// newTestHandler returns the handler with an analyzer that uses client, and
-// the buffer it logs to.
-func newTestHandler(client *http.Client) (http.Handler, *bytes.Buffer) {
+// newTestHandler returns the handler with an analyzer that uses client, the
+// buffer it logs to and the registry that holds its metrics.
+func newTestHandler(client *http.Client) (http.Handler, *bytes.Buffer, *prometheus.Registry) {
 	logs := new(bytes.Buffer)
-	return NewHandler(slog.New(slog.NewJSONHandler(logs, nil)), analyzer.New(client)), logs
+	reg := prometheus.NewRegistry()
+	return NewHandler(slog.New(slog.NewJSONHandler(logs, nil)), analyzer.New(client), reg), logs, reg
 }
 
 // decodeLogs parses the JSON log lines in logs, keyed by message.
@@ -118,11 +121,13 @@ func TestNewHandler(t *testing.T) {
 		{name: "wrong method", method: http.MethodPost, path: "/healthz", wantStatus: http.StatusMethodNotAllowed},
 		{name: "wrong method for form", method: http.MethodPost, path: "/", wantStatus: http.StatusMethodNotAllowed},
 		{name: "wrong method for analyze", method: http.MethodPost, path: "/analyze", wantStatus: http.StatusMethodNotAllowed},
+		{name: "no metrics", method: http.MethodGet, path: "/metrics", wantStatus: http.StatusNotFound},
+		{name: "no pprof", method: http.MethodGet, path: "/debug/pprof/", wantStatus: http.StatusNotFound},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, logs := newTestHandler(&http.Client{})
+			h, logs, _ := newTestHandler(&http.Client{})
 
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
@@ -139,7 +144,7 @@ func TestNewHandler(t *testing.T) {
 }
 
 func TestForm(t *testing.T) {
-	h, _ := newTestHandler(&http.Client{})
+	h, _, _ := newTestHandler(&http.Client{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -246,7 +251,7 @@ func TestAnalyze(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, logs := newTestHandler(upstream.Client())
+			h, logs, reg := newTestHandler(upstream.Client())
 			submitted := upstream.URL + tt.path
 			path := "/analyze?url=" + url.QueryEscape(submitted)
 
@@ -273,6 +278,7 @@ func TestAnalyze(t *testing.T) {
 				t.Error("body contains an unchecked links row")
 			}
 			checkRequestLog(t, decodeLogs(t, logs), http.MethodGet, "/analyze", http.StatusOK)
+			checkAnalysisMetrics(t, reg, "ok")
 		})
 	}
 }
@@ -313,6 +319,7 @@ func TestAnalyzeErrors(t *testing.T) {
 		wantStatus  int
 		wantTitle   string
 		wantMessage string
+		wantOutcome string
 	}{
 		{
 			name:        "missing url parameter",
@@ -320,6 +327,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadRequest,
 			wantTitle:   "400 Bad Request",
 			wantMessage: "The URL is empty." + enterURL,
+			wantOutcome: "invalid_url",
 		},
 		{
 			name:        "empty url parameter",
@@ -327,6 +335,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadRequest,
 			wantTitle:   "400 Bad Request",
 			wantMessage: "The URL is empty." + enterURL,
+			wantOutcome: "invalid_url",
 		},
 		{
 			name:        "missing scheme",
@@ -334,6 +343,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadRequest,
 			wantTitle:   "400 Bad Request",
 			wantMessage: "The URL has no http:// or https:// prefix." + enterURL,
+			wantOutcome: "invalid_url",
 		},
 		{
 			name:        "unsupported scheme",
@@ -341,6 +351,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadRequest,
 			wantTitle:   "400 Bad Request",
 			wantMessage: `The URL must use http or https, not "ftp".` + enterURL,
+			wantOutcome: "invalid_url",
 		},
 		{
 			name:        "malformed URL",
@@ -348,6 +359,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadRequest,
 			wantTitle:   "400 Bad Request",
 			wantMessage: `Invalid character " " in host name.` + enterURL,
+			wantOutcome: "invalid_url",
 		},
 		{
 			name:        "page not found",
@@ -355,6 +367,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadGateway,
 			wantTitle:   "404 Not Found",
 			wantMessage: statusMsg,
+			wantOutcome: "bad_status",
 		},
 		{
 			name:        "page server error",
@@ -362,6 +375,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadGateway,
 			wantTitle:   "500 Internal Server Error",
 			wantMessage: statusMsg,
+			wantOutcome: "bad_status",
 		},
 		{
 			name:        "status without standard text",
@@ -369,6 +383,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadGateway,
 			wantTitle:   "599",
 			wantMessage: statusMsg,
+			wantOutcome: "bad_status",
 		},
 		{
 			name:        "timeout",
@@ -377,6 +392,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusGatewayTimeout,
 			wantTitle:   "504 Gateway Timeout",
 			wantMessage: unreachedMsg + "request timed out.",
+			wantOutcome: "timeout",
 		},
 		{
 			name:        "host not found",
@@ -385,6 +401,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadGateway,
 			wantTitle:   "502 Bad Gateway",
 			wantMessage: unreachedMsg + "host name could not be resolved.",
+			wantOutcome: "unreachable",
 		},
 		{
 			name:        "connection refused",
@@ -392,6 +409,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusBadGateway,
 			wantTitle:   "502 Bad Gateway",
 			wantMessage: unreachedMsg + "connection refused.",
+			wantOutcome: "unreachable",
 		},
 		{
 			name:        "not HTML",
@@ -399,6 +417,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			wantStatus:  http.StatusUnprocessableEntity,
 			wantTitle:   "422 Unprocessable Entity",
 			wantMessage: "The URL does not point to an HTML page, so it could not be analyzed.",
+			wantOutcome: "not_html",
 		},
 	}
 
@@ -412,7 +431,7 @@ func TestAnalyzeErrors(t *testing.T) {
 			if path == "" {
 				path = "/analyze?url=" + url.QueryEscape(tt.target)
 			}
-			h, logs := newTestHandler(client)
+			h, logs, reg := newTestHandler(client)
 
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -449,6 +468,7 @@ func TestAnalyzeErrors(t *testing.T) {
 				t.Error("log entry has no err")
 			}
 			checkRequestLog(t, entries, http.MethodGet, "/analyze", tt.wantStatus)
+			checkAnalysisMetrics(t, reg, tt.wantOutcome)
 		})
 	}
 }
@@ -477,7 +497,7 @@ func TestAnalyzeEscapesUserText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, _ := newTestHandler(upstream.Client())
+			h, _, _ := newTestHandler(upstream.Client())
 
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/analyze?url="+url.QueryEscape(tt.target), nil))
@@ -494,22 +514,42 @@ func TestAnalyzeEscapesUserText(t *testing.T) {
 }
 
 func TestAnalyzeClientGone(t *testing.T) {
-	upstream := httptest.NewServer(htmlPage("<title>Never fetched</title>"))
-	defer upstream.Close()
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	h, logs := newTestHandler(upstream.Client())
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/analyze?url="+url.QueryEscape(upstream.URL), nil)
-	h.ServeHTTP(rec, req)
-
-	if rec.Body.Len() != 0 {
-		t.Errorf("body = %q, want empty", rec.Body.String())
+	tests := []struct {
+		name        string
+		cancelFirst bool // cancel before the request rather than when the page's link is checked
+	}{
+		// Analyze fails, since the page cannot be fetched.
+		{name: "before the page is fetched", cancelFirst: true},
+		// The page was fetched, so Analyze returns a result without an error.
+		{name: "while links are checked"},
 	}
-	if _, ok := decodeLogs(t, logs)["analysis failed"]; ok {
-		t.Error("logged a failed analysis for a client that went away")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			mux := http.NewServeMux()
+			mux.HandleFunc("/{$}", htmlPage(`<a href="/link">Link</a>`))
+			mux.HandleFunc("/link", func(w http.ResponseWriter, r *http.Request) { cancel() })
+			upstream := httptest.NewServer(mux)
+			defer upstream.Close()
+			if tt.cancelFirst {
+				cancel()
+			}
+			h, logs, reg := newTestHandler(upstream.Client())
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/analyze?url="+url.QueryEscape(upstream.URL), nil)
+			h.ServeHTTP(rec, req)
+
+			if rec.Body.Len() != 0 {
+				t.Errorf("body = %q, want empty", rec.Body.String())
+			}
+			if _, ok := decodeLogs(t, logs)["analysis failed"]; ok {
+				t.Error("logged a failed analysis for a client that went away")
+			}
+			checkAnalysisMetrics(t, reg, "canceled")
+		})
 	}
 }
 
@@ -552,8 +592,11 @@ func TestRenderErrorUnexpected(t *testing.T) {
 	const detail = "internal detail the user must not see"
 
 	rec := httptest.NewRecorder()
-	s.renderError(rec, httptest.NewRequest(http.MethodGet, "/analyze", nil), "https://example.com", errors.New(detail))
+	outcome := s.renderError(rec, httptest.NewRequest(http.MethodGet, "/analyze", nil), "https://example.com", errors.New(detail))
 
+	if outcome != "error" {
+		t.Errorf("outcome = %q, want error", outcome)
+	}
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
