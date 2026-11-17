@@ -596,6 +596,36 @@ func TestRenderUncheckedLinks(t *testing.T) {
 	}
 }
 
+func TestRenderFailedLinks(t *testing.T) {
+	s := &server{logger: slog.New(slog.DiscardHandler), page: pageTemplate}
+	res := &analyzer.Result{
+		InaccessibleLinks: 3,
+		FailedLinks: []analyzer.FailedLink{
+			{URL: "https://example.com/a?x=1&y=2", Reason: "404 Not Found", Count: 2},
+			{URL: "https://example.org/", Reason: "connection refused", Count: 1},
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	s.render(rec, http.StatusOK, pageData{Result: res})
+	body := rec.Body.String()
+	for _, want := range []string{
+		"<h3>Inaccessible links</h3>",
+		`<tr><td>https://example.com/a?x=1&amp;y=2 <span class="none">(2 times)</span></td><td>404 Not Found</td></tr>`,
+		`<tr><td>https://example.org/</td><td>connection refused</td></tr>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body does not contain %q", want)
+		}
+	}
+
+	rec = httptest.NewRecorder()
+	s.render(rec, http.StatusOK, pageData{Result: &analyzer.Result{}})
+	if strings.Contains(rec.Body.String(), "<h3>Inaccessible links</h3>") {
+		t.Error("body lists inaccessible links when there are none")
+	}
+}
+
 func TestRenderErrorUnexpected(t *testing.T) {
 	var logs bytes.Buffer
 	s := &server{logger: slog.New(slog.NewJSONHandler(&logs, nil)), page: pageTemplate}

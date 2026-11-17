@@ -149,7 +149,7 @@ func TestCheckLinks(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			links := linksOn(t, page, tt.hrefs...)
-			inaccessible, unchecked := New(ts.Client()).checkLinks(t.Context(), mustParse(t, page), links)
+			inaccessible, unchecked, _ := New(ts.Client()).checkLinks(t.Context(), mustParse(t, page), links)
 			if inaccessible != tt.wantInaccessible {
 				t.Errorf("inaccessible = %d, want %d", inaccessible, tt.wantInaccessible)
 			}
@@ -175,7 +175,7 @@ func TestCheckLinkRequest(t *testing.T) {
 	a.linkTimeout = time.Minute
 
 	start := time.Now()
-	if state := a.checkLink(t.Context(), ts.URL); state != linkAccessible {
+	if state, _ := a.checkLink(t.Context(), ts.URL); state != linkAccessible {
 		t.Errorf("state = %d, want linkAccessible", state)
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
@@ -188,7 +188,7 @@ func TestCheckLinkRequest(t *testing.T) {
 
 func TestCheckLinkUnparsableURL(t *testing.T) {
 	a := New(&http.Client{Transport: errTransport{err: errors.New("no request expected")}})
-	if state := a.checkLink(t.Context(), "http://exa mple.com/"); state != linkInaccessible {
+	if state, _ := a.checkLink(t.Context(), "http://exa mple.com/"); state != linkInaccessible {
 		t.Errorf("state = %d, want linkInaccessible", state)
 	}
 }
@@ -207,7 +207,7 @@ func TestCheckLinksRequestsEachURLOnce(t *testing.T) {
 
 	page := ts.URL + "/page"
 	links := linksOn(t, page, "/missing", "/ok#a", "/missing", "/ok#b", "/ok", "/missing#c", "#top", "/page")
-	inaccessible, unchecked := New(ts.Client()).checkLinks(t.Context(), mustParse(t, page), links)
+	inaccessible, unchecked, _ := New(ts.Client()).checkLinks(t.Context(), mustParse(t, page), links)
 
 	if inaccessible != 3 {
 		t.Errorf("inaccessible = %d, want 3", inaccessible)
@@ -274,7 +274,7 @@ func TestCheckLinksWorkers(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				inaccessible, unchecked = a.checkLinks(t.Context(), mustParse(t, page), links)
+				inaccessible, unchecked, _ = a.checkLinks(t.Context(), mustParse(t, page), links)
 			}()
 			// Wait until as many requests are in flight as the workers allow,
 			// then let them finish one at a time to stay at that limit.
@@ -354,7 +354,7 @@ func TestCheckLinksTimeouts(t *testing.T) {
 			a.checkTimeout = tt.checkTimeout
 			page := ts.URL + "/page"
 
-			inaccessible, unchecked := a.checkLinks(t.Context(), mustParse(t, page), linksOn(t, page, tt.hrefs...))
+			inaccessible, unchecked, _ := a.checkLinks(t.Context(), mustParse(t, page), linksOn(t, page, tt.hrefs...))
 			if inaccessible != tt.wantInaccessible {
 				t.Errorf("inaccessible = %d, want %d", inaccessible, tt.wantInaccessible)
 			}
@@ -398,7 +398,7 @@ func TestCheckLinksCancel(t *testing.T) {
 	page := ts.URL + "/page"
 	links := linksOn(t, page, "/missing", "/slow/1", "/slow/2", "/ok", "/slow/1")
 	start := time.Now()
-	inaccessible, unchecked := a.checkLinks(ctx, mustParse(t, page), links)
+	inaccessible, unchecked, _ := a.checkLinks(ctx, mustParse(t, page), links)
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("checkLinks took %v, want it to return soon after cancel", elapsed)
 	}
@@ -429,11 +429,57 @@ func TestCheckLinksLimit(t *testing.T) {
 	a := New(ts.Client())
 	a.maxLinks = 3
 
-	inaccessible, unchecked := a.checkLinks(t.Context(), mustParse(t, page), links)
+	inaccessible, unchecked, _ := a.checkLinks(t.Context(), mustParse(t, page), links)
 	if inaccessible != 0 || unchecked != 3 {
 		t.Errorf("inaccessible, unchecked = %d, %d, want 0, 3", inaccessible, unchecked)
 	}
 	if got := requests.Load(); got != 3 {
 		t.Errorf("server got %d requests, want 3", got)
+	}
+}
+
+func TestCheckLinksFailedLinks(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/missing":
+			http.NotFound(w, r)
+		case "/odd":
+			w.WriteHeader(599)
+		case "/slow":
+			<-r.Context().Done()
+		}
+	}))
+	defer ts.Close()
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+
+	page := ts.URL + "/page"
+	links := linksOn(t, page, "/slow", "/ok", "/missing", closed.URL+"/x", "/odd", "/missing#again")
+	a := New(ts.Client())
+	a.linkTimeout = 200 * time.Millisecond
+
+	inaccessible, unchecked, failed := a.checkLinks(t.Context(), mustParse(t, page), links)
+	if inaccessible != 5 || unchecked != 0 {
+		t.Errorf("inaccessible, unchecked = %d, %d, want 5, 0", inaccessible, unchecked)
+	}
+	// In page order, whichever order the workers finished in.
+	want := []FailedLink{
+		{URL: ts.URL + "/slow", Reason: "request timed out", Count: 1},
+		{URL: ts.URL + "/missing", Reason: "404 Not Found", Count: 2},
+		{URL: closed.URL + "/x", Reason: "connection refused", Count: 1},
+		{URL: ts.URL + "/odd", Reason: "599", Count: 1},
+	}
+	if !slices.Equal(failed, want) {
+		t.Errorf("failed = %+v, want %+v", failed, want)
+	}
+}
+
+func TestCheckLinkPrivateAddress(t *testing.T) {
+	ts := httptest.NewServer(http.NotFoundHandler())
+	defer ts.Close()
+
+	state, reason := New(NewClient(time.Second, false)).checkLink(t.Context(), ts.URL)
+	if state != linkInaccessible || reason != "private or local address" {
+		t.Errorf("checkLink = %v, %q, want inaccessible, private or local address", state, reason)
 	}
 }

@@ -54,6 +54,7 @@ type Result struct {
 	ExternalLinks     int            // http(s) links to any other host
 	InaccessibleLinks int            // links that failed or answered with status 400 or above
 	UncheckedLinks    int            // links left unchecked by the link limit, time limit or cancellation
+	FailedLinks       []FailedLink   // the inaccessible links, each listed once
 	HasLoginForm      bool           // a form with exactly one password field
 }
 
@@ -72,7 +73,7 @@ func (a *Analyzer) Analyze(ctx context.Context, rawURL string) (*Result, error) 
 		return nil, err
 	}
 	res.URL = final.String()
-	res.InaccessibleLinks, res.UncheckedLinks = a.checkLinks(ctx, final, links)
+	res.InaccessibleLinks, res.UncheckedLinks, res.FailedLinks = a.checkLinks(ctx, final, links)
 	return res, nil
 }
 

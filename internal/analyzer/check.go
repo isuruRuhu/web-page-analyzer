@@ -2,8 +2,10 @@ package analyzer
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -33,17 +35,26 @@ const (
 
 // linkResult is what a worker reports for one link.
 type linkResult struct {
-	url   string
-	state linkState
+	url    string
+	state  linkState
+	reason string // why the link is inaccessible
 }
 
-// checkLinks requests every unique link once, up to the link limit, and
+// FailedLink is a link that turned out to be inaccessible.
+type FailedLink struct {
+	URL    string
+	Reason string // the status, such as "404 Not Found", or why the request failed
+	Count  int    // how many times the link appears on the page
+}
+
+// checkLinks requests every unique link once, up to the link limit. It
 // returns how many links are inaccessible and how many were left unchecked,
-// both counted per occurrence on the page.
-func (a *Analyzer) checkLinks(ctx context.Context, page *url.URL, links []*url.URL) (inaccessible, unchecked int) {
+// both counted per occurrence on the page, and the inaccessible links in page
+// order.
+func (a *Analyzer) checkLinks(ctx context.Context, page *url.URL, links []*url.URL) (inaccessible, unchecked int, failed []FailedLink) {
 	urls, counts := uniqueLinks(page, links)
 	if len(urls) == 0 {
-		return 0, 0
+		return 0, 0, nil
 	}
 	if len(urls) > a.maxLinks {
 		for _, u := range urls[a.maxLinks:] {
@@ -68,7 +79,8 @@ func (a *Analyzer) checkLinks(ctx context.Context, page *url.URL, links []*url.U
 	for range min(a.workers, len(urls)) {
 		wg.Go(func() {
 			for u := range jobs {
-				results <- linkResult{url: u, state: a.checkLink(ctx, u)}
+				state, reason := a.checkLink(ctx, u)
+				results <- linkResult{url: u, state: state, reason: reason}
 			}
 		})
 	}
@@ -76,24 +88,34 @@ func (a *Analyzer) checkLinks(ctx context.Context, page *url.URL, links []*url.U
 	// Only the workers send on results, and they have all returned.
 	close(results)
 
+	// Results arrive in the order the workers finish, so the reasons are
+	// looked up by URL to list the failed links in page order.
+	reasons := make(map[string]string)
 	for r := range results {
 		switch r.state {
 		case linkInaccessible:
 			inaccessible += counts[r.url]
+			reasons[r.url] = r.reason
 		case linkUnchecked:
 			unchecked += counts[r.url]
 		}
 	}
-	return inaccessible, unchecked
+	for _, u := range urls {
+		if reason, ok := reasons[u]; ok {
+			failed = append(failed, FailedLink{URL: u, Reason: reason, Count: counts[u]})
+		}
+	}
+	return inaccessible, unchecked, failed
 }
 
 // checkLink GETs rawURL, following redirects, and reports whether it is
-// accessible. ctx limits the whole check; the link also gets its own deadline.
-func (a *Analyzer) checkLink(ctx context.Context, rawURL string) linkState {
+// accessible and, if it is not, why. ctx limits the whole check; the link
+// also gets its own deadline.
+func (a *Analyzer) checkLink(ctx context.Context, rawURL string) (linkState, string) {
 	// Links still queued when the check is over are not requested at all, so
 	// the workers empty the queue at once.
 	if ctx.Err() != nil {
-		return linkUnchecked
+		return linkUnchecked, ""
 	}
 	linkCtx, cancel := context.WithTimeout(ctx, a.linkTimeout)
 	defer cancel()
@@ -102,7 +124,7 @@ func (a *Analyzer) checkLink(ctx context.Context, rawURL string) linkState {
 	// for pages that work in a browser.
 	req, err := http.NewRequestWithContext(linkCtx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return linkInaccessible
+		return linkInaccessible, "invalid URL"
 	}
 	req.Header.Set("User-Agent", userAgent)
 
@@ -111,16 +133,27 @@ func (a *Analyzer) checkLink(ctx context.Context, rawURL string) linkState {
 		// Only the link's own timeout counts against it. If the whole check
 		// ran out of time or was cancelled, the link may well be fine.
 		if ctx.Err() != nil {
-			return linkUnchecked
+			return linkUnchecked, ""
 		}
-		return linkInaccessible
+		if errors.Is(err, ErrPrivateAddress) {
+			return linkInaccessible, "private or local address"
+		}
+		return linkInaccessible, unreachable(err).Reason
 	}
 	// Only the status matters, so the body is closed unread.
 	resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
-		return linkInaccessible
+		return linkInaccessible, statusReason(resp.StatusCode)
 	}
-	return linkAccessible
+	return linkAccessible, ""
+}
+
+// statusReason returns a status code with its standard text, if it has one.
+func statusReason(code int) string {
+	if text := http.StatusText(code); text != "" {
+		return strconv.Itoa(code) + " " + text
+	}
+	return strconv.Itoa(code)
 }
 
 // uniqueLinks returns the links to check, each once in the form given by
